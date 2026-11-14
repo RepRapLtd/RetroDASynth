@@ -2,284 +2,392 @@
 #include <Arduino.h>
 #include <math.h>
 
-// -------- User settings --------
+// ============================================================
+// AVR32DA28 VCO
+// DxCore, 24 MHz internal clock
+//
+// PD0  Pitch CV
+// PD3  Volume CV
+// PD7  Shape CV
+// PD6  DAC output
+//
+// PA5  Waveform bit 0
+// PA6  Waveform bit 1
+// PA4  Low-frequency range (grounded = low)
+//
+// Waveforms:
+// 0 Sine
+// 1 Triangle / sawtooth
+// 2 Square / pulse
+// 3 White noise (high range)
+//   Bounded random walk (low range)
+// ============================================================
 
-const uint8_t DAC_P   = PIN_PA6;
-const uint8_t CV_P    = PIN_PA2;
-const uint8_t WAVE_P  = PIN_PA1;
-const uint8_t SHAPE_P = PIN_PA3;
-const uint8_t AMP_P   = PIN_PA7;  // NEW
+const uint8_t EXTRA_VOLUME_PIN = PIN_PD4;
 
 const uint32_t SAMPLE_RATE = 40000;
 
-const float MIN_FREQ = 50.0f;
+const float HIGH_BASE = 50.0f;
+const float LOW_BASE = 0.05f;
 const float VOLTS_PER_OCTAVE = 0.75f;
-const float SUPPLY_VOLTAGE = 5.0f;
 
-const uint8_t LOW_LEVEL  = 8;
-const uint8_t HIGH_LEVEL = 248;
-const uint8_t MID_LEVEL  = 128;
+const int16_t DAC_MID = 512;
+const int16_t DAC_AMP = 480;
 
-// Waveform numbers
-const uint8_t SINE     = 0;
-const uint8_t TRIANGLE = 1;
-const uint8_t SQUARE   = 2;
-const uint8_t NOISE    = 3;
+uint16_t waveTable[2][256];
 
-// -------- Quarter-sine table in flash --------
+volatile uint8_t activeTable = 0;
+volatile uint8_t waveform = 0;
+volatile uint8_t lowNoiseMode = 0;
 
-const uint8_t sineTable[65] = {
-  128,131,134,137,140,143,146,149,
-  151,154,157,160,163,166,168,171,
-  174,177,179,182,185,187,190,192,
-  195,197,199,202,204,206,209,211,
-  213,215,217,219,221,223,224,226,
-  228,229,231,232,234,235,236,238,
-  239,240,241,242,243,244,244,245,
-  246,246,247,247,247,248,248,248,
-  248
-};
-
-// -------- Oscillator state --------
+volatile uint16_t volumeGain = 0;
+volatile int16_t driftOffset = 0;
 
 volatile uint32_t phase = 0;
 volatile uint32_t phaseIncrement = 0;
 
-volatile uint8_t waveform = SINE;
+// White noise PRNG, used only in interrupt
+uint32_t rng = 0xACE12345UL;
 
-volatile uint16_t trianglePeak = 128;
-volatile uint16_t riseScale = 480;
-volatile uint16_t fallScale = 480;
-
-volatile uint8_t pulseWidth = 128;
-
-// NEW: amplitude, 0 to 255
-volatile uint8_t amplitude = 0;
-
-// 32-bit white noise generator
-uint32_t rng = 0xACE12345;
-
-// -------- Waveform interrupt --------
-
+// ============================================================
+// AUDIO INTERRUPT
+// ============================================================
 
 ISR(TCB0_INT_vect)
 {
   phase += phaseIncrement;
 
-  uint8_t p = phase >> 24;
-  uint8_t output;
+  int32_t output;
 
-  // -------- Generate waveform --------
-
-  if (waveform == SINE)
+  if (waveform == 3 && lowNoiseMode)
   {
-    uint8_t q = p >> 6;
-    uint8_t i = p & 63;
-
-    switch (q)
-    {
-      case 0:
-        output = sineTable[i];
-        break;
-
-      case 1:
-        output = sineTable[64 - i];
-        break;
-
-      case 2:
-        output = 256 - sineTable[i];
-        break;
-
-      default:
-        output = 256 - sineTable[64 - i];
-        break;
-    }
-  }
-  else if (waveform == TRIANGLE)
-  {
-    if (p < trianglePeak)
-    {
-      output = LOW_LEVEL +
-        (((uint32_t)p * riseScale) >> 8);
-    }
-    else
-    {
-      output = LOW_LEVEL +
-        (((uint32_t)(256 - p) * fallScale) >> 8);
-    }
-  }
-  else if (waveform == SQUARE)
-  {
-    output = (p < pulseWidth) ?
-      HIGH_LEVEL : LOW_LEVEL;
+    // Random walk is already limited by volume.
+    // Preserve exact one-DAC-count steps.
+    output = DAC_MID + driftOffset;
   }
   else
   {
-    // White noise: 32-bit xorshift
-    rng ^= rng << 13;
-    rng ^= rng >> 17;
-    rng ^= rng << 5;
+    uint16_t sample;
 
-    output = LOW_LEVEL +
-      (((uint16_t)(uint8_t)rng * 240) >> 8);
+    if (waveform == 3)
+    {
+      // 32-bit white noise
+      rng ^= rng << 13;
+      rng ^= rng >> 17;
+      rng ^= rng << 5;
+
+      sample = rng & 1023;
+    }
+    else
+    {
+      uint8_t index = phase >> 24;
+      sample = waveTable[activeTable][index];
+    }
+
+    int16_t centred = (int16_t)sample - DAC_MID;
+
+    int32_t scaled =
+        (int32_t)centred * volumeGain;
+
+    //output = DAC_MID + (scaled >> 8);
+    output = DAC_MID + (scaled >> 8);
+
+    if (output < 0)
+      output = 0;
+    
+    if (output > 1023)
+      output = 1023;
   }
 
-  // -------- Smooth amplitude --------
+  DAC0.DATA = output << 6;
 
-  // 16 fractional bits for precision
-  static int32_t smoothAmp = 0;
-
-  // Convert requested amplitude to fixed point
-  int32_t targetAmp = (int32_t)amplitude << 16;
-
-  // First-order low-pass filter
-  // Time constant approximately 25.6 ms
-  smoothAmp += (targetAmp - smoothAmp) >> 10;
-
-  // Recover 8-bit amplitude
-  uint8_t currentAmp = smoothAmp >> 16;
-
-  // -------- Apply amplitude --------
-
-  // Centre waveform around zero
-  int16_t centred = (int16_t)output - MID_LEVEL;
-
-  // Multiply by smoothed amplitude
-  int32_t scaled = (int32_t)centred * currentAmp;
-
-  // Restore midpoint and output to DAC
-  DAC0.DATA = MID_LEVEL + (scaled >> 8);
-
-  // Clear timer interrupt flag
   TCB0.INTFLAGS = TCB_CAPT_bm;
 }
 
+// ============================================================
+// BUILD WAVEFORM
+// ============================================================
 
-// -------- Initialisation --------
+void buildWaveform(uint8_t type, uint8_t shape)
+{
+  uint8_t next = activeTable ^ 1;
+
+  for (uint16_t i = 0; i < 256; i++)
+  {
+    int16_t value = 0;
+
+    switch (type)
+    {
+      case 0:
+        value = (int16_t)
+          (DAC_AMP * sinf(2.0f * PI * i / 256.0f));
+        break;
+
+      case 1:
+      {
+        uint16_t peak =
+            1 + (uint16_t)shape * 254 / 255;
+
+        if (i < peak)
+          value = -DAC_AMP +
+              (int32_t)2 * DAC_AMP * i / peak;
+        else
+          value = DAC_AMP -
+              (int32_t)2 * DAC_AMP *
+              (i - peak) / (256 - peak);
+
+        break;
+      }
+
+      case 2:
+      {
+        uint16_t duty =
+            26 + (uint16_t)shape * 204 / 255;
+
+        value = (i < duty) ? DAC_AMP : -DAC_AMP;
+        break;
+      }
+    }
+
+    waveTable[next][i] = DAC_MID + value;
+  }
+
+  noInterrupts();
+  activeTable = next;
+  interrupts();
+}
+
+// ============================================================
+// SETUP
+// ============================================================
 
 void setup()
 {
-  DACReference(INTERNAL4V3);
-  analogWrite(DAC_P, MID_LEVEL);
+  pinMode(PIN_PA4, INPUT_PULLUP);
+  pinMode(PIN_PA5, INPUT_PULLUP);
+  pinMode(PIN_PA6, INPUT_PULLUP);
 
+  pinMode(PIN_PD0, INPUT);
+  pinMode(PIN_PD3, INPUT);
+  pinMode(PIN_PD7, INPUT);
+  pinMode(EXTRA_VOLUME_PIN, INPUT);
+
+  analogReadResolution(12);
   analogReference(VDD);
 
-  pinMode(CV_P, INPUT);
-  pinMode(WAVE_P, INPUT);
-  pinMode(SHAPE_P, INPUT);
-  pinMode(AMP_P, INPUT);  // NEW
+  // DxCore 1.6.2 ADC reference workaround
+  VREF.ADC0REF =
+      (VREF.ADC0REF & ~VREF_REFSEL_gm) |
+      VREF_REFSEL_VDD_gc;
 
-  // Configure 40 kHz timer
+  (void)analogRead(PIN_PD0);
+  (void)analogRead(PIN_PD3);
+  (void)analogRead(PIN_PD7);
+  (void)analogRead(EXTRA_VOLUME_PIN);
+
+  DACReference(VDD);
+  analogWrite(PIN_PD6, 128);
+  DAC0.DATA = DAC_MID << 6;
+
+  buildWaveform(0, 128);
+  buildWaveform(0, 128);
+
+  phaseIncrement =
+      (uint32_t)(HIGH_BASE *
+                 4294967296.0 / SAMPLE_RATE);
+
   TCB0.CTRLA = 0;
   TCB0.CTRLB = TCB_CNTMODE_INT_gc;
-
   TCB0.CCMP = (F_CPU / SAMPLE_RATE) - 1;
 
   TCB0.INTFLAGS = TCB_CAPT_bm;
   TCB0.INTCTRL = TCB_CAPT_bm;
 
   TCB0.CTRLA =
-    TCB_CLKSEL_CLKDIV1_gc | TCB_ENABLE_bm;
+      TCB_CLKSEL_CLKDIV1_gc |
+      TCB_ENABLE_bm;
 }
 
-// -------- Main control loop --------
+// ============================================================
+// MAIN LOOP
+// ============================================================
 
 void loop()
 {
-  static int32_t filteredADC = -1;
-  static uint8_t waveCounter = 0;
-  static uint8_t selectedWave = SINE;
+  static uint8_t oldWaveform = 255;
+  static uint8_t oldShape = 255;
 
-  // ----- Exponential frequency control -----
+  static bool pitchInitialised = false;
+  static uint32_t smoothPitchQ8 = 0;
+  static uint32_t smoothVolumeQ8 = 0;
 
-  uint16_t adc = analogRead(CV_P);
+  // Random-walk scheduling
+  static bool wasLowNoise = false;
+  static uint32_t nextDriftMs = 0;
 
-  int32_t target = (int32_t)adc * 256;
+  // ---- Read controls ----
 
-  if (filteredADC < 0)
+  uint16_t pitchADC = analogRead(PIN_PD0);
+  uint16_t volumeADC = analogRead(PIN_PD3);
+  volumeADC += analogRead(EXTRA_VOLUME_PIN);
+  uint16_t shapeADC = analogRead(PIN_PD7);
+
+  uint8_t selected =
+      (!digitalRead(PIN_PA5) ? 1 : 0) |
+      (!digitalRead(PIN_PA6) ? 2 : 0);
+
+  uint8_t shape = shapeADC >> 4;
+
+  bool lowRange = !digitalRead(PIN_PA4);
+  bool drifting = (selected == 3 && lowRange);
+
+  // ---- Waveform table ----
+
+  if (selected != oldWaveform ||
+      ((selected == 1 || selected == 2) &&
+       shape != oldShape))
   {
-    filteredADC = target;
+    buildWaveform(selected, shape);
+
+    oldWaveform = selected;
+    oldShape = shape;
   }
-  else if (abs(target - filteredADC) > 2048)
+
+  // ---- Pitch smoothing ----
+
+  uint32_t pitchTarget = (uint32_t)pitchADC << 8;
+
+  if (!pitchInitialised)
   {
-    filteredADC = target;
+    smoothPitchQ8 = pitchTarget;
+    pitchInitialised = true;
   }
   else
   {
-    filteredADC += (target - filteredADC) / 16;
+    smoothPitchQ8 +=
+        ((int32_t)pitchTarget -
+         (int32_t)smoothPitchQ8) / 8;
   }
 
   float voltage =
-    (filteredADC / 256.0f) *
-    SUPPLY_VOLTAGE / 1023.0f;
+      (smoothPitchQ8 / 256.0f) *
+      (5.0f / 4095.0f);
+
+  float baseFrequency =
+      lowRange ? LOW_BASE : HIGH_BASE;
 
   float frequency =
-    MIN_FREQ * powf(2.0f,
-      voltage / VOLTS_PER_OCTAVE);
+      baseFrequency *
+      powf(2.0f, voltage / VOLTS_PER_OCTAVE);
 
   uint32_t increment =
-    (uint32_t)(frequency *
-               4294967296.0 / SAMPLE_RATE);
+      (uint32_t)(frequency *
+                 4294967296.0 / SAMPLE_RATE);
 
-  // ----- Four-position waveform selector -----
+  // ---- Volume smoothing ----
 
-  if (++waveCounter >= 20)
-  {
-    waveCounter = 0;
+  uint16_t targetGain = (volumeADC + 8) >> 4;
+  uint32_t targetQ8 = (uint32_t)targetGain << 8;
 
-    uint16_t w = analogRead(WAVE_P);
+  smoothVolumeQ8 +=
+      ((int32_t)targetQ8 -
+       (int32_t)smoothVolumeQ8) / 4;
 
-    if (w < 170)
-      selectedWave = SINE;
-    else if (w < 512)
-      selectedWave = TRIANGLE;
-    else if (w < 852)
-      selectedWave = SQUARE;
-    else
-      selectedWave = NOISE;
-  }
+  uint16_t newGain = smoothVolumeQ8 >> 8;
 
-  // ----- Waveform shaping -----
+  // Random-walk boundaries depend on volume.
+  int16_t limit =
+      (int32_t)DAC_AMP * newGain / 256;
+  if (limit > 511)
+    limit = 511;
 
-  uint16_t shape = analogRead(SHAPE_P);
-
-  uint16_t peak = 128 +
-    ((uint32_t)shape * 128 / 1023);
-
-  uint16_t rising =
-    ((uint32_t)240 * 256) / peak;
-
-  uint16_t falling = 0;
-
-  if (peak < 256)
-  {
-    falling =
-      ((uint32_t)240 * 256) / (256 - peak);
-  }
-
-  uint8_t width = 128 -
-    ((uint32_t)shape * 96 / 1023);
-
-  // ----- NEW: amplitude control -----
-
-  uint16_t ampADC = analogRead(AMP_P);
-
-  // Scale 10-bit ADC to 8-bit amplitude
-  uint8_t newAmplitude = ampADC >> 2;
-
-  // ----- Atomic state update -----
+  // ---- Update shared variables atomically ----
 
   noInterrupts();
 
   phaseIncrement = increment;
-  waveform = selectedWave;
-  trianglePeak = peak;
-  riseScale = rising;
-  fallScale = falling;
-  pulseWidth = width;
-  amplitude = newAmplitude;
+  volumeGain = newGain;
+  waveform = selected;
+  lowNoiseMode = drifting;
+
+  // Keep existing walk inside new volume bounds
+  if (driftOffset > limit)
+    driftOffset = limit;
+
+  if (driftOffset < -limit)
+    driftOffset = -limit;
 
   interrupts();
+
+  // ---- Low-frequency random walk ----
+
+  if (drifting)
+  {
+    uint32_t now = millis();
+
+    if (!wasLowNoise)
+    {
+      // Begin a new walk from the midpoint
+      noInterrupts();
+      driftOffset = 0;
+      interrupts();
+
+      nextDriftMs = now;
+    }
+
+    if ((int32_t)(now - nextDriftMs) >= 0)
+    {
+      // Choose random direction, reflecting
+      // at boundaries.
+      int16_t next;
+
+      noInterrupts();
+
+      next = driftOffset;
+
+      if (limit > 0)
+      {
+        int8_t direction = random(2) ? 1 : -1;
+
+        if (next >= limit)
+          direction = -1;
+        else if (next <= -limit)
+          direction = 1;
+
+        next += 20 * direction;
+
+        // Keep the walk inside the volume limits
+        if (next > limit)
+          next = limit;
+        if (next < -limit)
+          next = -limit;
+      }
+      else
+      {
+        next = 0;
+      }
+
+      driftOffset = next;
+
+      interrupts();
+
+      // Mean interval = 1 / frequency.
+      // Random multiplier: 0.5 to 1.5.
+      uint32_t meanMs =
+       (uint32_t)(100.0f / frequency);
+
+      uint32_t interval =
+          meanMs * (uint32_t)random(500, 1501)
+          / 1000UL;
+
+      if (interval < 1)
+        interval = 1;
+
+      nextDriftMs = now + interval;
+    }
+  }
+
+  wasLowNoise = drifting;
 
   delay(5);
 }
