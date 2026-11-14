@@ -5010,6 +5010,16 @@
 	)
 	(wire
 		(pts
+			(xy 129.54 74.93) (xy 139.7 74.93)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "ba996e1d-59c1-422e-8df1-23cd438d9065")
+	)
+	(wire
+		(pts
 			(xy 86.36 69.85) (xy 86.36 63.5)
 		)
 		(stroke
@@ -5057,6 +5067,16 @@
 			(type default)
 		)
 		(uuid "c72fe3fe-08e1-4bdf-ab5f-293472533c47")
+	)
+	(wire
+		(pts
+			(xy 129.54 77.47) (xy 139.7 77.47)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "cbe35f3e-ae1f-4867-82a2-909963b56dd5")
 	)
 	(wire
 		(pts
@@ -7515,6 +7535,88 @@
 			(project "universal"
 				(path "/ae154157-cc8f-425d-b288-91b70114e87f"
 					(reference "Attack-e/Volume-o/Bandwidth-f1")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "Connector:Conn_01x02_Pin")
+		(at 144.78 77.47 180)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(fields_autoplaced yes)
+		(uuid "6a1ddf8d-212f-4fa6-ae3d-e2acd6f1e278")
+		(property "Reference" "J18"
+			(at 146.05 74.9299 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+		(property "Value" "I2C"
+			(at 146.05 77.4699 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+		(property "Footprint" "Connector_PinHeader_2.54mm:PinHeader_1x02_P2.54mm_Vertical"
+			(at 144.78 77.47 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 144.78 77.47 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" "Generic connector, single row, 01x02, script generated"
+			(at 144.78 77.47 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "1"
+			(uuid "f161dfd8-0df1-44b9-a0ce-135255bae9b6")
+		)
+		(pin "2"
+			(uuid "a0b6f51b-abb4-462a-bc3d-f2cbf9cbce70")
+		)
+		(instances
+			(project "universal"
+				(path "/ae154157-cc8f-425d-b288-91b70114e87f"
+					(reference "J18")
 					(unit 1)
 				)
 			)
