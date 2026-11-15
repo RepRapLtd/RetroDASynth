@@ -665,7 +665,7 @@
         "uuid": "ae154157-cc8f-425d-b288-91b70114e87f"
       }
     ],
-    "used_designators": "#PWR1-27,Attack\\-e/Volume\\-o/Bandwidth\\-f1,C1-5,Decay\\-e/Shape\\-o/x\\-f1,H1-4,J1-18,R1-4,RV1-3,SW1-3,U1-2,Volume\\-e/Pitch\\-o/Pitch\\-f1",
+    "used_designators": "#PWR1-29,Attack\\-e/Volume\\-o/Bandwidth\\-f1,C1-6,Decay\\-e/Shape\\-o/x\\-f1,H1-4,J1-19,R1-6,RV1-3,SW1-3,U1-2,Volume\\-e/Pitch\\-o/Pitch\\-f1",
     "variants": []
   },
   "sheets": [
