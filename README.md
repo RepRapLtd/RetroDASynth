@@ -6,6 +6,8 @@
 
 The design aims to be accessible to hobbyists: through-hole components where practicable, hand-solderable PCBs, 3D-printable mechanical parts, straightforward 5 V power, and published hardware and software. The ultimate aim is a self-contained, MIDI-controlled, polyphonic instrument, with sequencing and facilities for experimenting with the signal chain.
 
+It is being created by Adrian Bowyer with significant inputs from ChatGPT.
+
 ## The prototype so far
 
 The photograph above shows the current experimental system. **A working monophonic MIDI-controlled voice** has been demonstrated, using:
@@ -93,3 +95,7 @@ Firmware development uses the **Arduino IDE** and **DxCore** for the AVR DA-seri
 ## Licence
 
 This repository includes the [GNU General Public License, version 3](LICENSE). See that file for the applicable licence terms.
+
+## Written by
+
+Adrian Bowyer and ChatGPT
