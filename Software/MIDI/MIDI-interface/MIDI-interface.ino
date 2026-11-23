@@ -1,21 +1,38 @@
-
 #include <MIDI.h>
+#include <SPI.h>
 #include <Wire.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 #include <math.h>
 
+// ------------------------------------
 // Hardware
+// ------------------------------------
+
 const int GATE_PIN = 2;
-const int DAC_PIN  = A0;
+const int DAC_CS   = 10;
 
 const int OLED_WIDTH  = 128;
 const int OLED_HEIGHT = 64;
 const int OLED_ADDR   = 0x3C;
 
-// MIDI and voltage settings
-const float DAC_REFERENCE = 5.0f;
+// ------------------------------------
+// DAC and pitch settings
+// ------------------------------------
+
+// MCP4822: 12-bit, internal 2.048 V
+// reference, configured for 2x gain.
+//
+// Each DAC count = 1 mV nominally.
+
+const float DAC_FULL_SCALE = 4.096f;
+const int DAC_MAX_CODE = 4095;
+
 const float VOLTS_PER_OCTAVE = 0.75f;
+
+// ------------------------------------
+// MIDI and OLED
+// ------------------------------------
 
 MIDI_CREATE_INSTANCE(HardwareSerial, Serial1, MIDI);
 
@@ -23,33 +40,101 @@ Adafruit_SSD1306 display(
   OLED_WIDTH, OLED_HEIGHT, &Wire, -1
 );
 
+// ------------------------------------
 // State
+// ------------------------------------
+
 bool notePlaying = false;
 int currentNote = -1;
 int lastNote = -1;
 int lastVelocity = 0;
-int lastChannel = 0;
-bool displayDirty = true;
 
+bool displayDirty = true;
+bool oledAvailable = false;
 unsigned long lastDisplayTime = 0;
 
-// Convert MIDI note number to pitch voltage
+// ------------------------------------
+// Write to MCP4822
+//
+// channel = 0: VOUTA (pitch)
+// channel = 1: VOUTB (velocity)
+//
+// 2x gain, output enabled.
+// LDAC is permanently grounded.
+// ------------------------------------
+
+void writeDAC(byte channel, uint16_t value) {
+
+  // Bit 15: DAC channel (0=A, 1=B)
+  // Bit 14: Unbuffered reference
+  // Bit 13: Gain (0=2x)
+  // Bit 12: Shutdown (1=active)
+  // Bits 11..0: 12-bit DAC value
+
+  uint16_t command = 0x1000;
+
+  if (channel == 1) {
+    command |= 0x8000;
+  }
+
+  command |= (value & 0x0FFF);
+
+  SPI.beginTransaction(
+    SPISettings(8000000, MSBFIRST, SPI_MODE0)
+  );
+
+  digitalWrite(DAC_CS, LOW);
+
+  SPI.transfer(highByte(command));
+  SPI.transfer(lowByte(command));
+
+  digitalWrite(DAC_CS, HIGH);
+
+  SPI.endTransaction();
+}
+
+// ------------------------------------
+// Convert MIDI note to pitch voltage
+// ------------------------------------
+
 void setPitch(int note) {
+
   float volts = VOLTS_PER_OCTAVE *
     (log2f(440.0f / 50.0f) +
      (note - 69) / 12.0f);
 
-  volts = constrain(volts, 0.0f, DAC_REFERENCE);
-
-  int value = (int)roundf(
-    volts * 4095.0f / DAC_REFERENCE
+  volts = constrain(
+    volts, 0.0f, DAC_FULL_SCALE
   );
 
-  analogWrite(DAC_PIN, value);
+  int value = (int)roundf(
+    volts * 4096.0f / DAC_FULL_SCALE
+  );
+
+  value = constrain(value, 0, DAC_MAX_CODE);
+
+  writeDAC(0, value);
 }
 
-// Convert MIDI note to name, e.g. C4
+// ------------------------------------
+// Convert MIDI velocity to CV
+// ------------------------------------
+
+void setVelocity(int velocity) {
+
+  velocity = constrain(velocity, 0, 127);
+
+  int value = (velocity * 4095L + 63) / 127;
+
+  writeDAC(1, value);
+}
+
+// ------------------------------------
+// MIDI note name
+// ------------------------------------
+
 void noteName(int note, char *buffer) {
+
   if (note < 0) {
     strcpy(buffer, "---");
     return;
@@ -61,28 +146,47 @@ void noteName(int note, char *buffer) {
   };
 
   int octave = note / 12 - 1;
-  sprintf(buffer, "%s%d", names[note % 12], octave);
+
+  sprintf(
+    buffer, "%s%d",
+    names[note % 12], octave
+  );
 }
 
+// ------------------------------------
 // MIDI callbacks
-void handleNoteOn(byte channel, byte note, byte velocity) {
+// ------------------------------------
+
+void handleNoteOff(byte channel,
+                   byte note,
+                   byte velocity) {
+
+  if (notePlaying && currentNote == note) {
+
+    digitalWrite(GATE_PIN, HIGH);
+
+    notePlaying = false;
+    displayDirty = true;
+  }
+}
+
+void handleNoteOn(byte channel,
+                  byte note,
+                  byte velocity) {
+
   if (velocity == 0) {
-    if (notePlaying && currentNote == note) {
-      digitalWrite(GATE_PIN, HIGH);
-      notePlaying = false;
-      displayDirty = true;
-    }
+    handleNoteOff(channel, note, velocity);
     return;
   }
 
   currentNote = note;
   lastNote = note;
   lastVelocity = velocity;
-  lastChannel = channel;
 
   setPitch(note);
+  setVelocity(velocity);
 
-  // Retrigger envelope for a new note
+  // Retrigger envelope
   digitalWrite(GATE_PIN, HIGH);
   digitalWrite(GATE_PIN, LOW);
 
@@ -90,16 +194,14 @@ void handleNoteOn(byte channel, byte note, byte velocity) {
   displayDirty = true;
 }
 
-void handleNoteOff(byte channel, byte note, byte velocity) {
-  if (notePlaying && currentNote == note) {
-    digitalWrite(GATE_PIN, HIGH);
-    notePlaying = false;
-    displayDirty = true;
-  }
-}
+// ------------------------------------
+// OLED display
+// ------------------------------------
 
-// Draw display
 void updateDisplay() {
+
+  if (!oledAvailable) return;
+
   char name[8];
   noteName(lastNote, name);
 
@@ -114,7 +216,9 @@ void updateDisplay() {
   display.setCursor(86, 0);
   display.print("POLY 1");
 
-  display.drawLine(0, 11, 127, 11, SSD1306_WHITE);
+  display.drawLine(
+    0, 11, 127, 11, SSD1306_WHITE
+  );
 
   // Labels
   display.setCursor(0, 16);
@@ -125,6 +229,7 @@ void updateDisplay() {
 
   // Large values
   display.setTextSize(2);
+
   display.setCursor(0, 28);
   display.print(name);
 
@@ -132,13 +237,19 @@ void updateDisplay() {
   display.print(notePlaying ? "1/1" : "0/1");
 
   // Voice indicator
-  display.drawRect(0, 47, 128, 5, SSD1306_WHITE);
+  display.drawRect(
+    0, 47, 128, 5, SSD1306_WHITE
+  );
+
   if (notePlaying) {
-    display.fillRect(1, 48, 126, 3, SSD1306_WHITE);
+    display.fillRect(
+      1, 48, 126, 3, SSD1306_WHITE
+    );
   }
 
   // Bottom status line
   display.setTextSize(1);
+
   display.setCursor(0, 56);
   display.print("Vel:");
   display.print(lastVelocity);
@@ -149,16 +260,27 @@ void updateDisplay() {
   display.display();
 }
 
+// ------------------------------------
+// Setup
+// ------------------------------------
+
 void setup() {
+
   pinMode(GATE_PIN, OUTPUT);
   digitalWrite(GATE_PIN, HIGH);
 
-  analogWriteResolution(12);
-  analogWrite(DAC_PIN, 0);
+  pinMode(DAC_CS, OUTPUT);
+  digitalWrite(DAC_CS, HIGH);
 
   Serial.begin(115200);
 
-  // MIDI DIN input on Serial1 (D0/RX)
+  // SPI DAC
+  SPI.begin();
+
+  writeDAC(0, 0);
+  writeDAC(1, 0);
+
+  // MIDI input
   MIDI.begin(MIDI_CHANNEL_OMNI);
   MIDI.turnThruOff();
 
@@ -168,7 +290,11 @@ void setup() {
   // OLED on A4/A5
   Wire.begin();
 
-  if (!display.begin(SSD1306_SWITCHCAPVCC, OLED_ADDR)) {
+  oledAvailable = display.begin(
+    SSD1306_SWITCHCAPVCC, OLED_ADDR
+  );
+
+  if (!oledAvailable) {
     Serial.println("OLED not found");
   } else {
     display.clearDisplay();
@@ -178,13 +304,19 @@ void setup() {
   displayDirty = true;
 }
 
+// ------------------------------------
+// Main loop
+// ------------------------------------
+
 void loop() {
+
   MIDI.read();
 
-  // Limit screen updates to 10 per second
   if (displayDirty &&
       millis() - lastDisplayTime >= 100) {
+
     updateDisplay();
+
     displayDirty = false;
     lastDisplayTime = millis();
   }

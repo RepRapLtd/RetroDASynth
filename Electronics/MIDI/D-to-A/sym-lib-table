@@ -1,0 +1,4 @@
+(sym_lib_table
+	(version 7)
+	(lib (name "synth") (type "") (uri "/home/ensab/Nextcloud/RepRapLtd/Engineering/Internal-Projects/RetroDASynth/Electronics/MIDI") (options "") (descr ""))
+)

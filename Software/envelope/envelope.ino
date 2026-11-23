@@ -8,6 +8,7 @@
 // PD0  Attack time
 // PD3  Decay time
 // PD7  Level
+// PF0  Level
 // PD6  Envelope output (10-bit DAC)
 //
 // PA0  Gate input: grounded = ON
@@ -190,7 +191,7 @@ void startEnvelope(uint32_t now)
       analogRead(PIN_PD3),
       MIN_DECAY, MAX_DECAY);
 
-  level = analogRead(PIN_PD7) >> 2;
+  level = (analogRead(PIN_PD7) + analogRead(PIN_PF0)) >> 2;
 
   shape =
       (!digitalRead(PIN_PA5) ? 1 : 0) |
@@ -319,6 +320,7 @@ void setup()
   pinMode(PIN_PD0, INPUT);
   pinMode(PIN_PD3, INPUT);
   pinMode(PIN_PD7, INPUT);
+  pinMode(PIN_PF0, INPUT);
 
   analogReadResolution(12);
   analogReference(VDD);
@@ -331,6 +333,7 @@ void setup()
   (void)analogRead(PIN_PD0);
   (void)analogRead(PIN_PD3);
   (void)analogRead(PIN_PD7);
+  (void)analogRead(PIN_PF0);
 
   DACReference(VDD);
   analogWrite(PIN_PD6, 128);
