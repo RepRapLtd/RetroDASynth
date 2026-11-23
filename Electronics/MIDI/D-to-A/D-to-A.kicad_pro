@@ -430,7 +430,7 @@
         "uuid": "1ed98d89-644d-4982-a883-a19b4159fe6d"
       }
     ],
-    "used_designators": "#PWR1-8,C1-2,J1-10,R1,SW1-3,U1",
+    "used_designators": "#PWR1-9,C1-2,H1-4,J1-10,R1,SW1-3,U1",
     "variants": []
   },
   "sheets": [
