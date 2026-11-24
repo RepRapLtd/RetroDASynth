@@ -8,9 +8,14 @@
 // DxCore 1.6.2, 24 MHz internal clock
 //
 // PD0  Pitch CV
-// PD3  Volume CV 1
-// PD4  Volume CV 2
+// PD1  Pitch CV
+// PD2  Pitch CV
+// PD3  Volume CV
+// PD4  Volume CV
+// PD5  Volume CV
 // PD7  Shape CV
+// PF0  Shape CV
+// PF1  Shape CV
 // PD6  10-bit DAC output
 //
 // PC0  PWM reference output (93.75 kHz)
@@ -20,10 +25,10 @@
 // PA6  Waveform bit 1
 //
 // Waveforms:
-//   0 Sine
-//   1 Triangle / sawtooth
-//   2 Square / pulse
-//   3 White noise / low-frequency random walk
+//   3 Sine
+//   2 Triangle / sawtooth
+//   1 Square / pulse
+//   0 White noise / low-frequency random walk
 //
 // Sample rate: 40000 Hz
 // Pitch: 0.75 V/octave
@@ -237,10 +242,14 @@ void setup()
 
   pinMode(PIN_PD0, INPUT);
   pinMode(PIN_PD1, INPUT);
+  pinMode(PIN_PD2, INPUT);
   pinMode(PIN_PD3, INPUT);
   pinMode(PIN_PD4, INPUT);
+  pinMode(PIN_PD5, INPUT);
   pinMode(PIN_PD7, INPUT);
-
+  pinMode(PIN_PF0, INPUT);
+  pinMode(PIN_PF1, INPUT);
+    
   analogReadResolution(12);
   analogReference(VDD);
 
@@ -251,9 +260,13 @@ void setup()
 
   (void)analogRead(PIN_PD0);
   (void)analogRead(PIN_PD1);
+  (void)analogRead(PIN_PD2);
   (void)analogRead(PIN_PD3);
   (void)analogRead(PIN_PD4);
+  (void)analogRead(PIN_PD5);
   (void)analogRead(PIN_PD7);
+  (void)analogRead(PIN_PF0);
+  (void)analogRead(PIN_PF1);
 
   // Enable DAC
   DACReference(VDD);
@@ -304,19 +317,23 @@ void loop()
   // ---- Read analogue controls ----
 
   uint16_t pitchADC = analogRead(PIN_PD0)
-                  + analogRead(PIN_PD1);
+                  + analogRead(PIN_PD1)
+                  + analogRead(PIN_PD2);
 
   uint16_t volumeADC =
-      analogRead(PIN_PD3) +
-      analogRead(PIN_PD4);
-
-  uint16_t shapeADC = analogRead(PIN_PD7);
+      analogRead(PIN_PD3)
+      + analogRead(PIN_PD4)
+      + analogRead(PIN_PD5);
+      
+  uint16_t shapeADC = analogRead(PIN_PD7)
+      + analogRead(PIN_PF0)
+      + analogRead(PIN_PF1);
 
   // ---- Waveform selection ----
 
   uint8_t selected =
-      (!digitalRead(PIN_PA5) ? 1 : 0) |
-      (!digitalRead(PIN_PA6) ? 2 : 0);
+      (!digitalRead(PIN_PA5) ? 0 : 1) |
+      (!digitalRead(PIN_PA6) ? 0 : 2);
 
   uint8_t shape = shapeADC >> 4;
 
